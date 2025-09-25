@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard de Monitoramento</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+    <style>
+        html { font-family: Arial, Helvetica, sans-serif; display: inline-block; text-align: center; }
+        body { margin: 0; background-color: #f0f2f5; }
+        .topnav { overflow: hidden; background-color: #0A1128; color: white; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; }
+        h1 { font-size: 1.8rem; }
+        .content { padding: 2% 5%; }
+        .card-grid { max-width: 1200px; margin: 0 auto; display: grid; grid-gap: 2rem; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+        .card { background-color: white; box-shadow: 2px 2px 12px 1px rgba(140,140,140,.5); padding: 20px; border-radius: 4px; }
+        .card-title { font-size: 1.2rem; font-weight: bold; color: #034078; margin-top: 0; }
+        .kpi-container { text-align: center; }
+        .kpi-value { font-size: 4rem; font-weight: bold; color: #1282A2; margin: 10px 0; }
+        .kpi-label { font-size: 1.2rem; color: #606770; }
+        .status { font-weight: bold; padding: 5px 10px; border-radius: 5px; color: white; font-size: 1rem; }
+        .connected { background-color: #31a24c; }
+        .disconnected { background-color: #f02849; }
+        /* Grid para o layout principal do dashboard */
+        .dashboard-grid {
+            grid-template-columns: 2fr 1fr;
+        }
+        /* Ajuste para o cartão do gráfico ocupar toda a largura em telas menores */
+        .chart-card {
+            grid-column: 1 / -1;
+        }
+        @media (min-width: 900px) {
+            .chart-card {
+                grid-column: 1 / span 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="topnav">
+        <h1>Dashboard de Monitoramento</h1>
+        <div id="status" class="status disconnected">● Desconectado</div>
+    </div>
+
+    <div class="content">
+        <div class="card-grid dashboard-grid">
+            <div class="card chart-card">
+                <p class="card-title">Sinais Vitais em Tempo Real</p>
+                <canvas id="mainChart"></canvas>
+            </div>
+
+            <div class="card kpi-container">
+                <p class="card-title">Leituras Atuais</p>
+                <div>
+                    <div class="kpi-label">SpO₂ (%)</div>
+                    <div id="spo2Value" class="kpi-value">--</div>
+                </div>
+                <div>
+                    <div class="kpi-label">BPM</div>
+                    <div id="bpmValue" class="kpi-value">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const mainChartCtx = document.getElementById('mainChart').getContext('2d');
+        const mainChart = new Chart(mainChartCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Sinal ECG', data: [], borderColor: '#f02849', yAxisID: 'yEcg', tension: 0.4, pointRadius: 0 },
+                    { label: 'BPM', data: [], borderColor: '#034078', yAxisID: 'yBpm', stepped: true },
+                    { label: 'SpO2', data: [], borderColor: '#1282A2', yAxisID: 'yBpm', stepped: true }
+                ]
+            },
+            options: {
+                animation: false,
+                scales: {
+                    yEcg: { type: 'linear', position: 'left', title: { display: true, text: 'ECG' } },
+                    yBpm: { type: 'linear', position: 'right', min: 40, max: 200, title: { display: true, text: 'BPM / SpO2' }, grid: { drawOnChartArea: false } }
+                }
+            }
+        });
+
+        async function loadHistoricalData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                
+                const labels = data.labels.map(t => new Date(t).toLocaleTimeString());
+                
+                mainChart.data.labels = labels;
+                mainChart.data.datasets[0].data = data.ecg;
+                mainChart.data.datasets[1].data = data.bpm;
+                mainChart.data.datasets[2].data = data.spo2;
+                mainChart.update();
+                console.log("Dados históricos carregados.");
+            } catch (error) {
+                console.error("Erro ao carregar dados históricos:", error);
+            }
+        }
+
+        const client = new Paho.Client(window.location.hostname, 9001, "WebAppClient_" + Date.now());
+        client.onConnectionLost = (res) => {
+            console.log("Conexão MQTT perdida:", res.errorMessage);
+            document.getElementById('status').textContent = '● Desconectado';
+            document.getElementById('status').className = 'status disconnected';
+        };
+        client.onMessageArrived = (message) => {
+            const data = JSON.parse(message.payloadString);
+            const now = new Date().toLocaleTimeString();
+            
+            if (message.destinationName.endsWith("sensor_ecg")) {
+                updateChart(now, data.ecg.value, null, null);
+                
+            } else if (message.destinationName.endsWith("sensor_max")) {
+                if (data.bpm.valid) document.getElementById('bpmValue').textContent = data.bpm.value;
+                if (data.spo2.valid) document.getElementById('spo2Value').textContent = data.spo2.value;
+                updateChart(now, null, data.bpm.value, data.spo2.value);
+            }
+        };
+
+        client.connect({
+            onSuccess: () => {
+                console.log("Conectado ao Broker MQTT via WebSockets!");
+                document.getElementById('status').textContent = '● Conectado';
+                document.getElementById('status').className = 'status connected';
+                client.subscribe("test/esp/#");
+            },
+            onFailure: (res) => console.log("Falha na conexão MQTT:", res.errorMessage),
+            reconnect: true
+        });
+
+        function updateChart(label, ecg, bpm, spo2) {
+            const MAX_POINTS = 100;
+            mainChart.data.labels.push(label);
+            if (mainChart.data.labels.length > MAX_POINTS) mainChart.data.labels.shift();
+
+            [ { data: ecg, datasetIndex: 0 }, { data: bpm, datasetIndex: 1 }, { data: spo2, datasetIndex: 2 } ]
+            .forEach(item => {
+                const dataset = mainChart.data.datasets[item.datasetIndex].data;
+                const valueToPush = item.data ?? (dataset.length > 0 ? dataset[dataset.length - 1] : null);
+                dataset.push(valueToPush);
+                if (dataset.length > MAX_POINTS) dataset.shift();
+            });
+
+            mainChart.update();
+        }
+
+        window.onload = loadHistoricalData;
+    </script>
+</body>
+</html>
