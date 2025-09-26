@@ -29,3 +29,16 @@ python3 query.py
 ``` 
 
 > Exemplo utilizando Ubuntu 22.04, adapte para o seu ambiente
+
+### Checando so dados do monitoramento:
+
+
+utilizando o navegador, acesse a url:
+
+```bash
+# se estiver executando o projeto no mesmo dispositivo que irá utilizar para o monitoramento
+http://localhost
+
+# para acesso remoto:
+http://<IP | FQDN do servidor executando o projeto>
+```
